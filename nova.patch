@@ -1,0 +1,163 @@
+diff --git a/android/app/build.gradle.in b/android/app/build.gradle.in
+index 61b784f..e889157 100644
+--- a/android/app/build.gradle.in
++++ b/android/app/build.gradle.in
+@@ -12,9 +12,9 @@ android {
+     ndkVersion "@ANDROID_NDK_VERSION@"
+ 
+     defaultConfig {
+-        applicationId "info.exult"
++        applicationId "info.exult.nova"
+         namespace 'info.exult'
+-        minSdkVersion 28 // could lower to 18 if we locally implement glob()
++        minSdkVersion 33 // could lower to 18 if we locally implement glob()
+         targetSdkVersion @ANDROID_SDK_VERSION@
+         versionCode 1
+         versionName "@VERSION@ (" + getGitCommitId() + ")"
+diff --git a/android/app/src/main/AndroidManifest.xml b/android/app/src/main/AndroidManifest.xml
+index c57bc82..892b6c0 100644
+--- a/android/app/src/main/AndroidManifest.xml
++++ b/android/app/src/main/AndroidManifest.xml
+@@ -71,7 +71,7 @@
+         <meta-data android:name="SDL_ENV.SDL_ACCELEROMETER_AS_JOYSTICK" android:value="0"/>
+          -->
+ 
+-        <activity android:name="ExultLauncherActivity"
++        <activity android:name="info.exult.ExultLauncherActivity"
+             android:exported="true"
+             android:screenOrientation="landscape"
+             tools:ignore="LockedOrientationActivity"
+@@ -84,7 +84,7 @@
+                 android:name="android.app.shortcuts"
+                 android:resource="@xml/shortcuts" /> 
+         </activity>
+-        <activity android:name="ExultActivity"
++        <activity android:name="info.exult.ExultActivity"
+             android:exported="true"
+             android:label="@string/app_name"
+             android:alwaysRetainTaskState="true"
+diff --git a/android/app/src/main/java/info/exult/ExultActivity.java b/android/app/src/main/java/info/exult/ExultActivity.java
+index cf2861a..80b127e 100644
+--- a/android/app/src/main/java/info/exult/ExultActivity.java
++++ b/android/app/src/main/java/info/exult/ExultActivity.java
+@@ -39,6 +39,34 @@
+  * Android.
+  */
+ public class ExultActivity extends SDLActivity {
++    private NovaController nova;
++
++    @Override public boolean dispatchKeyEvent(android.view.KeyEvent event) {
++        if (nova != null && nova.key(event)) return true;
++        return super.dispatchKeyEvent(event);
++    }
++    @Override public boolean dispatchGenericMotionEvent(MotionEvent event) {
++        if (nova != null && nova.motion(event)) return true;
++        return super.dispatchGenericMotionEvent(event);
++    }
++    @Override public boolean dispatchTouchEvent(MotionEvent event) {
++        if (nova != null) nova.touch(event);
++        return super.dispatchTouchEvent(event);
++    }
++    @Override protected void onResume() {
++        super.onResume(); if (nova != null) nova.resume();
++    }
++    @Override protected void onPause() {
++        if (nova != null) nova.pause(); super.onPause();
++    }
++    @Override public void onWindowFocusChanged(boolean focused) {
++        if (nova != null) { if (focused) nova.resume(); else nova.pause(); }
++        super.onWindowFocusChanged(focused);
++    }
++    @Override protected void onDestroy() {
++        if (nova != null) nova.destroy(); super.onDestroy();
++    }
++
+ 	// Making this static for easy access from UI fragments, but it feels a bit
+ 	// hacky.
+ 	private static String m_consoleLog;
+@@ -273,6 +301,18 @@ public boolean onTouch(View v, MotionEvent event) {
+ 		hideButtonControls();
+ 		mLayout.addView(m_escTextView);
+ 		mLayout.addView(m_dpadImageView);
++        nova = new NovaController(this, mSurface);
++        // A touch-accessible entry point also allows remapping unknown controllers.
++        android.widget.Button controls = new android.widget.Button(this);
++        controls.setText("Nova controls");
++        RelativeLayout.LayoutParams params = new RelativeLayout.LayoutParams(
++            RelativeLayout.LayoutParams.WRAP_CONTENT, RelativeLayout.LayoutParams.WRAP_CONTENT);
++        params.addRule(RelativeLayout.ALIGN_PARENT_TOP);
++        params.addRule(RelativeLayout.ALIGN_PARENT_RIGHT);
++        controls.setLayoutParams(params);
++        controls.setAlpha(0.65f);
++        controls.setOnClickListener(v -> nova.showSettings());
++        mLayout.addView(controls);
+ 	}
+ 
+ 	/**
+diff --git a/android/app/src/main/res/values/strings.xml b/android/app/src/main/res/values/strings.xml
+index 565dd4e..a1049e8 100644
+--- a/android/app/src/main/res/values/strings.xml
++++ b/android/app/src/main/res/values/strings.xml
+@@ -1,6 +1,6 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="app_name">Exult</string>
++    <string name="app_name">Exult Nova</string>
+     <string name="shortcut_launcher_shortlabel">Force Start Launcher</string>
+     <string name="shortcut_launcher_longlabel">Force Start Launcher</string>
+     <string name="shortcut_launcher_disabledmessage">Force Start Launcher Disabled</string>
+diff --git a/android/app/src/main/res/xml/shortcuts.xml b/android/app/src/main/res/xml/shortcuts.xml
+index a06abe1..17f5a87 100644
+--- a/android/app/src/main/res/xml/shortcuts.xml
++++ b/android/app/src/main/res/xml/shortcuts.xml
+@@ -10,7 +10,7 @@
+         android:shortcutDisabledMessage="@string/shortcut_launcher_disabledmessage">
+         <intent
+             android:action="android.intent.action.EDIT"
+-            android:targetPackage="info.exult"
++            android:targetPackage="info.exult.nova"
+             android:targetClass="info.exult.ExultLauncherActivity" />
+ 
+     </shortcut>
+diff --git a/exult.cc b/exult.cc
+index 65e8e07..1eeb81e 100644
+--- a/exult.cc
++++ b/exult.cc
+@@ -2560,7 +2560,7 @@ void setup_video(
+ 		const int    sc                  = 1;
+ 		const string default_scaler      = "point";
+ 		const string default_fill_scaler = "point";
+-		const string default_fmode       = "Fill";
++		const string default_fmode       = "Aspect Correct Fit";
+ 		fullscreen                       = true;
+ 		config->set("config/video/force_bpp", 32, true);
+ #else
+diff --git a/keys.cc b/keys.cc
+index d4d2009..f457b3c 100644
+--- a/keys.cc
++++ b/keys.cc
+@@ -31,6 +31,9 @@
+ #endif    // __GNUC__
+ 
+ #include "Scroll_gump.h"
++#ifdef __ANDROID__
++#include "Gump_manager.h"
++#endif
+ #include "U7file.h"
+ #include "actors.h"
+ #include "cheat.h"
+@@ -363,6 +366,14 @@ void KeyBinder::AddKeyBinding(
+ }
+ 
+ bool KeyBinder::DoAction(const ActionType& a, bool press) const {
++#ifdef __ANDROID__
++    // Release walking even when a menu/cutscene opened after key-down.
++    // Never walk behind inventory gumps; menus remain pointer-operable.
++    if (a.action->func_release == ActionStopWalking) {
++        if (!press) { ActionStopWalking(a.params); return true; }
++        if (Game_window::get_instance()->get_gump_man()->gump_mode()) return true;
++    }
++#endif
+ 	if (!cheat()
+ 		&& (a.action->key_type == Action::cheat_keys
+ 			|| a.action->key_type == Action::mapedit_keys)) {
