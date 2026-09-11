@@ -9,8 +9,8 @@ mkdir "$nova_work"
 mkdir "$nova_work/source" "$nova_work/host"
 tar -xzf exult-1.12.1.tar.gz -C "$nova_work/source" --strip-components=1
 cd "$nova_work/source"
-git apply --check "$nova_repo/nova.patch"
-git apply "$nova_repo/nova.patch"
+patch --batch --forward --dry-run -p1 < "$nova_repo/nova.patch"
+patch --batch --forward -p1 < "$nova_repo/nova.patch"
 cp -R "$nova_repo/overlay/." .
 autoreconf -v -i
 cd "$nova_work/host"

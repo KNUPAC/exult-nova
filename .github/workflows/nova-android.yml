@@ -8,7 +8,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: nova-${{ github.ref }}
+  group: nova-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 jobs:
   build:
